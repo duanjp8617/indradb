@@ -11,17 +11,51 @@ use futures::executor::LocalPool;
 
 const DEFAULT_PORT: u16 = 27615;
 
+use std::net::IpAddr;
+use dummy_cli_parser::{CliParser, PatternType};
+
+struct ParseObj {
+    addr: IpAddr,
+    port: u16,
+}
+
+fn parse_cli() -> Result<ParseObj, String> {
+    let mut parser = CliParser::new(ParseObj{
+        addr: "127.0.0.1".parse::<IpAddr>().unwrap(),
+        port: DEFAULT_PORT,
+    });
+
+    parser.register_pattern("-ip", PatternType::OptionalWithArg, "ip address", 
+        |arg_str, parse_obj| {
+            arg_str.parse::<IpAddr>().map(|addr|{
+                parse_obj.addr = addr;
+            }).map_err(|_|{
+                String::from(format!("fail to parse argument \"{}\"", &arg_str))
+            })
+        }
+    )?;
+
+    parser.register_pattern("-p", PatternType::OptionalWithArg, "port", 
+        |arg_str, parse_obj| {
+            let parse_res = arg_str.parse::<u16>();
+            if parse_res.is_ok() {                               
+                parse_obj.port = parse_res.unwrap();
+                Ok(())
+            }
+            else {
+                Err(String::from(format!("fail to parse port number {}", &arg_str)))
+            }
+        }
+    )?;
+
+    parser.parse_env_args()
+}
+
 fn main() -> Result<(), errors::Error> {
     let mut exec = LocalPool::new();
 
-    let port = match env::var("PORT") {
-        Ok(value) => value
-            .parse::<u16>()
-            .expect("Could not parse environment variable `PORT`"),
-        Err(_) => DEFAULT_PORT,
-    };
-
-    let addr = format!("127.0.0.1:{}", port)
+    let po = parse_cli().unwrap();
+    let addr = (po.addr.to_string() + ":" +  &po.port.to_string())
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| -> errors::Error { errors::Error::CouldNotParseBinding })?;
@@ -52,6 +86,7 @@ fn main() -> Result<(), errors::Error> {
         exec.run_until(common::server::run(listener, datastore, exec.spawner()))?;
         Ok(())
     } else if connection_string == "memory://" {
+        println!("starting an in-memory db");
         let datastore = indradb::MemoryDatastore::default();
         exec.run_until(common::server::run(listener, datastore, exec.spawner()))?;
         Ok(())
